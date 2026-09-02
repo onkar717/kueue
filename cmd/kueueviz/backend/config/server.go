@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -35,6 +36,10 @@ type ServerConfig struct {
 	Port       string
 	AuthMode   string
 	AuthConfig middleware.AuthConfig
+	// Verbosity controls the slog log level: 0=info, 1=debug, 2=trace.
+	Verbosity int
+	// LogFormat controls the slog output format: "text" (default) or "json".
+	LogFormat string
 }
 
 // NewServerConfig creates a new server configuration
@@ -44,6 +49,8 @@ func NewServerConfig() *ServerConfig {
 	viper.SetDefault("KUEUEVIZ_AUTH_MODE", "Disabled")
 	viper.SetDefault("KUEUEVIZ_AUTH_TOKEN_REVIEW_CACHE_TTL", "60s")
 	viper.SetDefault("KUEUEVIZ_AUTH_TOKEN_REVIEW_NEGATIVE_CACHE_TTL", "5s")
+	viper.SetDefault("KUEUEVIZ_VERBOSITY", 0)
+	viper.SetDefault("KUEUEVIZ_LOG_FORMAT", "text")
 
 	var audiences []string
 	if raw := viper.GetString("KUEUEVIZ_AUTH_TOKEN_REVIEW_AUDIENCES"); raw != "" {
@@ -62,14 +69,51 @@ func NewServerConfig() *ServerConfig {
 	)
 
 	return &ServerConfig{
-		Port:     viper.GetString("KUEUEVIZ_PORT"),
-		AuthMode: viper.GetString("KUEUEVIZ_AUTH_MODE"),
+		Port:      viper.GetString("KUEUEVIZ_PORT"),
+		AuthMode:  viper.GetString("KUEUEVIZ_AUTH_MODE"),
+		Verbosity: viper.GetInt("KUEUEVIZ_VERBOSITY"),
+		LogFormat: viper.GetString("KUEUEVIZ_LOG_FORMAT"),
 		AuthConfig: middleware.AuthConfig{
 			Audiences:        audiences,
 			CacheTTL:         cacheTTL,
 			NegativeCacheTTL: negativeCacheTTL,
 		},
 	}
+}
+
+// SetupLogger configures the global slog logger based on the server configuration.
+// It must be called before any other startup log messages so that the chosen
+// level and format apply from the very first log line.
+//
+// Verbosity levels:
+//
+//	0 (default) → slog.LevelInfo
+//	1           → slog.LevelDebug
+//	2+          → LevelDebug-4 (trace; visible in controllers that log at V(4))
+//
+// LogFormat:
+//
+//	"json" → JSON structured output on stderr
+//	any other value (including "text") → human-readable text output on stderr
+func SetupLogger(cfg *ServerConfig) {
+	var level slog.Level
+	switch {
+	case cfg.Verbosity >= 2:
+		level = slog.LevelDebug - 4 // trace
+	case cfg.Verbosity == 1:
+		level = slog.LevelDebug
+	default:
+		level = slog.LevelInfo
+	}
+
+	opts := &slog.HandlerOptions{Level: level}
+	var handler slog.Handler
+	if strings.EqualFold(cfg.LogFormat, "json") {
+		handler = slog.NewJSONHandler(os.Stderr, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stderr, opts)
+	}
+	slog.SetDefault(slog.New(handler))
 }
 
 // SetupPprof starts the pprof server in development mode

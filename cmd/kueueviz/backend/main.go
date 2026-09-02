@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 	"kueueviz/config"
 	"kueueviz/handlers"
 	"kueueviz/middleware"
@@ -37,8 +39,26 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	// Initialize server configuration
+	// Parse CLI flags and bind them to viper keys so that flags take precedence
+	// over environment variables (viper resolution order: flag > env > default).
+	fs := pflag.NewFlagSet("kueueviz", pflag.ExitOnError)
+	fs.String("listen-port", "8080", "Port the backend HTTP server listens on (overrides KUEUEVIZ_PORT)")
+	fs.Int("verbosity", 0, "Log verbosity level: 0=info, 1=debug, 2=trace (overrides KUEUEVIZ_VERBOSITY)")
+	fs.String("log-format", "text", "Log output format: text or json (overrides KUEUEVIZ_LOG_FORMAT)")
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		slog.Error("Failed to parse flags", "error", err)
+		os.Exit(1)
+	}
+	_ = viper.BindPFlag("KUEUEVIZ_PORT", fs.Lookup("listen-port"))
+	_ = viper.BindPFlag("KUEUEVIZ_VERBOSITY", fs.Lookup("verbosity"))
+	_ = viper.BindPFlag("KUEUEVIZ_LOG_FORMAT", fs.Lookup("log-format"))
+
+	// Initialize server configuration (reads viper keys, which now include flag bindings)
 	serverConfig := config.NewServerConfig()
+
+	// Configure the global slog logger based on verbosity and format flags.
+	// This must happen before any other startup log messages.
+	config.SetupLogger(serverConfig)
 
 	// Setup pprof for development
 	config.SetupPprof()
